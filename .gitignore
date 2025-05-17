@@ -1,0 +1,5 @@
+snes/*.o
+src/*.o
+zelda3.elf
+zelda3.sfc
+zelda3.ini
