@@ -27,7 +27,7 @@
 #include "util.h"
 #include "audio.h"
 
-static bool g_run_without_emu = 0;
+static bool g_run_without_emu = 1;
 
 // Forwards
 static bool LoadRom(const char *filename);
@@ -206,34 +206,34 @@ static SDL_Texture *g_texture;
 static SDL_Rect g_sdl_renderer_rect;
 
 static bool SdlRenderer_Init(SDL_Window *window) {
-/*
+
   if (g_config.shader)
     fprintf(stderr, "Warning: Shaders are supported only with the OpenGL backend\n");
-*/
-  SDL_Renderer *renderer = SDL_CreateRenderer(g_window, 0, SDL_RENDERER_ACCELERATED);
+
+  //SDL_Renderer *renderer = SDL_CreateRenderer(g_window, 0, SDL_RENDERER_ACCELERATED);
+  g_renderer = SDL_CreateRenderer(g_window, 0, SDL_RENDERER_ACCELERATED);
   //SDL_Renderer *renderer = SDL_CreateRenderer(g_window, -1,
   //                                            g_config.output_method == kOutputMethod_SDLSoftware ? SDL_RENDERER_SOFTWARE :
   //                                            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   //if (renderer == NULL) {
   //  printf("Failed to create renderer: %s\n", SDL_GetError());
   //  return false;
-  // }
-  SDL_RendererInfo renderer_info;
-  SDL_RendererInfo g_renderer_info;
-  SDL_GetRendererInfo(renderer, &renderer_info);
+  //}
+  //SDL_RendererInfo renderer_info;
+  //SDL_GetRendererInfo(renderer, &renderer_info);
   //SDL_GetRendererInfo(g_renderer, &g_renderer_info);
   //if (kDebugFlag) {
     printf("Supported texture formats:");
-    for (int i = 0; i < g_renderer_info.num_texture_formats; i++)
-      printf(" %s", SDL_GetPixelFormatName(g_renderer_info.texture_formats[i]));
-    printf("\n");
+//    for (int i = 0; i < renderer_info.num_texture_formats; i++)
+//      printf(" %s", SDL_GetPixelFormatName(renderer_info.texture_formats[i]));
+//    printf("\n");
   //}
-  g_renderer = renderer;
-  if (!g_config.ignore_aspect_ratio)
-    SDL_RenderSetLogicalSize(renderer, g_snes_width, g_snes_height);
+  //g_renderer = renderer;
+  /*if (!g_config.ignore_aspect_ratio)
+    SDL_RenderSetLogicalSize(g_renderer, g_snes_width, g_snes_height);
   if (g_config.linear_filtering)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
-
+	*/
   //int tex_mult = (g_ppu_render_flags & kPpuRenderFlags_4x4Mode7) ? 4 : 1;
   int tex_mult = 1;
 
@@ -241,9 +241,8 @@ static bool SdlRenderer_Init(SDL_Window *window) {
 	//deleting and switching them, need to double check to make sure
 	//for now lets just see the btter texture implementation
 
-  g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ARGB1555, SDL_TEXTUREACCESS_STREAMING,
-                                //g_snes_width * tex_mult, g_snes_height * tex_mult);
-				g_snes_width, g_snes_height);
+  g_texture = SDL_CreateTexture(g_renderer,  SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING,
+                                g_snes_width * tex_mult, g_snes_height * tex_mult);
   if (g_texture == NULL) {
     printf("Failed to create texture: %s\n", SDL_GetError());
     return false;
@@ -272,7 +271,7 @@ static void SdlRenderer_EndDraw() {
 //  uint64 after = SDL_GetPerformanceCounter();
 //  float v = (double)(after - before) / SDL_GetPerformanceFrequency();
 //  printf("%f ms\n", v * 1000);
-  SDL_RenderClear(g_renderer);
+  //SDL_RenderClear(g_renderer);
   SDL_RenderCopy(g_renderer, g_texture, &g_sdl_renderer_rect, NULL);
   SDL_RenderPresent(g_renderer); // vsyncs to 60 FPS?
 }
@@ -411,7 +410,7 @@ int main(int argc, char** argv) {
     g_win_flags |= SDL_WINDOW_OPENGL;
     OpenGLRenderer_Create(&g_renderer_funcs, (g_config.output_method == kOutputMethod_OpenGL_ES));
   } else {
-    g_renderer_funcs = Ps2SdlRendererFuncs;
+    g_renderer_funcs = kSdlRendererFuncs;
   }
 
   SDL_Window* window = SDL_CreateWindow(kWindowTitle, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height, g_win_flags);
@@ -425,6 +424,7 @@ int main(int argc, char** argv) {
   if (!g_renderer_funcs.Initialize(window))
     return 1;
 
+  #ifndef _EE
   SDL_AudioDeviceID device = 0;
   SDL_AudioSpec want = { 0 }, have;
   g_audio_mutex = SDL_CreateMutex();
@@ -445,6 +445,7 @@ int main(int argc, char** argv) {
     g_frames_per_block = (534 * have.freq) / 32000;
     g_audiobuffer = malloc(g_frames_per_block * have.channels * sizeof(int16));
   }
+  #endif
 
   if (argc >= 1 && !g_run_without_emu)
     LoadRom(argv[0]);
@@ -509,7 +510,7 @@ int main(int argc, char** argv) {
         break;
       }
     }
-
+    #ifndef _EE
     if (g_paused != audiopaused) {
       audiopaused = g_paused;
       if (device)
@@ -520,6 +521,7 @@ int main(int argc, char** argv) {
       SDL_Delay(16);
       continue;
     }
+    #endif
 
     // Clear gamepad inputs when joypad directional inputs to avoid wonkiness
     int inputs = g_input1_state;
@@ -569,13 +571,16 @@ int main(int argc, char** argv) {
     HandleCommand(kKeys_Save + 0, true);
 
   // clean sdl
+  #ifndef _EE
   if (g_config.enable_audio) {
     SDL_PauseAudioDevice(device, 1);
     SDL_CloseAudioDevice(device);
   }
 
+
   SDL_DestroyMutex(g_audio_mutex);
   free(g_audiobuffer);
+  #endif
 
   g_renderer_funcs.Destroy();
 
