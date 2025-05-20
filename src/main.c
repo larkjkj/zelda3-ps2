@@ -13,6 +13,10 @@
 #include <unistd.h>
 #endif
 
+#ifdef _EE
+#include "ps2.h"
+#endif
+
 #include "snes/ppu.h"
 
 #include "types.h"
@@ -340,6 +344,9 @@ void OpenGLRenderer_Create(struct RendererFuncs *funcs, bool use_opengl_es);
 
 #undef main
 int main(int argc, char** argv) {
+  #ifdef _EE
+  InitPs2Stuff();
+  #endif
   argc--, argv++;
   const char *config_file = NULL;
   if (argc >= 2 && strcmp(argv[0], "--config") == 0) {
