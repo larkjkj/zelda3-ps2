@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <SDL.h>
+
 #ifdef _WIN32
 #include "platform/win32/volume_control.h"
 #include <direct.h>
@@ -14,7 +15,11 @@
 #endif
 
 #ifdef _EE
+#include "sbv_patches.h"
+#include "timer.h"
+#include "iopcontrol.h"
 #include "ps2.h"
+#include "sifrpc-common.h"
 #endif
 
 #include "snes/ppu.h"
@@ -31,7 +36,22 @@
 #include "util.h"
 #include "audio.h"
 
-static bool g_run_without_emu = 1;
+static bool g_run_without_emu = 0;
+
+
+//thanks DanielSant0s for the reset_IOP func, and fuck ps2 for making us developers do it manually
+static void reset_IOP() {
+	SifInitRpc(0);
+#if !defined(DEBUG) || defined(BUILD_FOR_PCSX2)
+    /* Comment this line if you don't wanna debug the output */
+    while (!SifIopReset(NULL, 0)) {};
+#endif
+
+    while (!SifIopSync()) {};
+    SifInitRpc(0);
+    sbv_patch_enable_lmb();
+    sbv_patch_disable_prefix_check();
+}
 
 // Forwards
 static bool LoadRom(const char *filename);
@@ -215,7 +235,7 @@ static bool SdlRenderer_Init(SDL_Window *window) {
     fprintf(stderr, "Warning: Shaders are supported only with the OpenGL backend\n");
 
   //SDL_Renderer *renderer = SDL_CreateRenderer(g_window, 0, SDL_RENDERER_ACCELERATED);
-  g_renderer = SDL_CreateRenderer(g_window, 0, SDL_RENDERER_ACCELERATED);
+  g_renderer = SDL_CreateRenderer(g_window, 0, SDL_RENDERER_SOFTWARE);
   //SDL_Renderer *renderer = SDL_CreateRenderer(g_window, -1,
   //                                            g_config.output_method == kOutputMethod_SDLSoftware ? SDL_RENDERER_SOFTWARE :
   //                                            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -227,19 +247,19 @@ static bool SdlRenderer_Init(SDL_Window *window) {
   //SDL_GetRendererInfo(renderer, &renderer_info);
   //SDL_GetRendererInfo(g_renderer, &g_renderer_info);
   //if (kDebugFlag) {
-    printf("Supported texture formats:");
+   // printf("Supported texture formats:");
 //    for (int i = 0; i < renderer_info.num_texture_formats; i++)
 //      printf(" %s", SDL_GetPixelFormatName(renderer_info.texture_formats[i]));
-//    printf("\n");
-  //}
+//    printf("\n");}
+  //
   //g_renderer = renderer;
-  /*if (!g_config.ignore_aspect_ratio)
+  if (!g_config.ignore_aspect_ratio)
     SDL_RenderSetLogicalSize(g_renderer, g_snes_width, g_snes_height);
   if (g_config.linear_filtering)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
-	*/
-  //int tex_mult = (g_ppu_render_flags & kPpuRenderFlags_4x4Mode7) ? 4 : 1;
-  int tex_mult = 1;
+	
+  int tex_mult = (g_ppu_render_flags & kPpuRenderFlags_4x4Mode7) ? 4 : 1;
+  //int tex_mult = 1;
 
 	//probally the low fps it's cause we're creating 2 renderers
 	//deleting and switching them, need to double check to make sure
@@ -345,7 +365,9 @@ void OpenGLRenderer_Create(struct RendererFuncs *funcs, bool use_opengl_es);
 #undef main
 int main(int argc, char** argv) {
   #ifdef _EE
+  reset_IOP();
   InitPs2Stuff();
+
   #endif
   argc--, argv++;
   const char *config_file = NULL;
@@ -402,12 +424,13 @@ int main(int argc, char** argv) {
 
 	//this is proposital, sdl cant initialize audio or controller(IDK WHY)
 	//needs manual implementation for ps2
-	//instead of getting into a infinite loop, we just check for video
-  if(SDL_Init(SDL_INIT_VIDEO) != 0) {
+//doublecheck fixed it	//instead of getting into a infinite loop, we just check for video
+
+  if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
     printf("Failed to init SDL: %s\n", SDL_GetError());
     return 1;
   }
-
+  
   bool custom_size  = g_config.window_width != 0 && g_config.window_height != 0;
   int window_width  = custom_size ? g_config.window_width  : g_current_window_scale * g_snes_width;
   int window_height = custom_size ? g_config.window_height : g_current_window_scale * g_snes_height;
@@ -431,7 +454,6 @@ int main(int argc, char** argv) {
   if (!g_renderer_funcs.Initialize(window))
     return 1;
 
-  #ifndef _EE
   SDL_AudioDeviceID device = 0;
   SDL_AudioSpec want = { 0 }, have;
   g_audio_mutex = SDL_CreateMutex();
@@ -452,7 +474,6 @@ int main(int argc, char** argv) {
     g_frames_per_block = (534 * have.freq) / 32000;
     g_audiobuffer = malloc(g_frames_per_block * have.channels * sizeof(int16));
   }
-  #endif
 
   if (argc >= 1 && !g_run_without_emu)
     LoadRom(argv[0]);
@@ -465,9 +486,10 @@ int main(int argc, char** argv) {
 
   ZeldaReadSram();
 
-  for (int i = 0; i < SDL_NumJoysticks(); i++)
+  for (int i = 0; i < SDL_NumJoysticks(); i++) {
+    printf("%p \n",i);
     OpenOneGamepad(i);
-
+  }
   bool running = true;
   SDL_Event event;
   uint32_t lastTick = SDL_GetTicks();
@@ -487,6 +509,7 @@ int main(int argc, char** argv) {
       case SDL_CONTROLLERAXISMOTION:
         HandleGamepadAxisInput(event.caxis.which, event.caxis.axis, event.caxis.value);
         break;
+      case SDL_CONTROLLER_BUTTON_A:
       case SDL_CONTROLLERBUTTONDOWN:
       case SDL_CONTROLLERBUTTONUP: {
         int b = RemapSdlButton(event.cbutton.button);
@@ -517,7 +540,6 @@ int main(int argc, char** argv) {
         break;
       }
     }
-    #ifndef _EE
     if (g_paused != audiopaused) {
       audiopaused = g_paused;
       if (device)
@@ -528,7 +550,6 @@ int main(int argc, char** argv) {
       SDL_Delay(16);
       continue;
     }
-    #endif
 
     // Clear gamepad inputs when joypad directional inputs to avoid wonkiness
     int inputs = g_input1_state;
@@ -765,6 +786,15 @@ static int RemapSdlButton(int button) {
   default: return -1;
   }
 }
+/*
+static int RemapSdlButton(int button) {
+  switch (button) {
+   case SDL_GAMEPAD_BUTTON_SOUTH: return kGamepadBtn_A;
+   case SDL_GAMEPAD_BUTTON_EAST: return kGamepadBtn_B;
+   case SDL_GAMEPAD_BUTTON_WEST: return kGamepadBtn_X;
+   case SDL_GAMEPAD_BUTTON_NORTH: return kGamepadBtn_Y;
+  }
+}*/
 
 static void HandleGamepadInput(int button, bool pressed) {
   if (!!(g_gamepad_modifiers & (1 << button)) == pressed)
